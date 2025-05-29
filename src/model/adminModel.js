@@ -3,6 +3,13 @@ const bcrypt = require("bcryptjs");
 
 const adminSchema = new mongoose.Schema(
   {
+    name: {
+      type: String,
+      required: [true, "Name is required"],
+      minlength: [3, "Name must be at least 3 characters long"],
+      maxlength: [50, "Name must be at most 50 characters long"],
+      trim: true,
+    },
     email: {
       type: String,
       required: [true, "Email is required"],
@@ -34,25 +41,9 @@ const adminSchema = new mongoose.Schema(
         },
       },
     ],
-
-    role: {
-      type: String,
-      default: "admin",
-      enum: ["admin", "super-admin"],
-    },
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
     lastLogin: {
       type: Date,
     },
-    permissions: [
-      {
-        type: String,
-        enum: ["read", "write", "delete", "manage-users", "manage-admins"],
-      },
-    ],
   },
   {
     timestamps: true,
