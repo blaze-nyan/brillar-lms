@@ -28,16 +28,27 @@ const leaveSchema = new mongoose.Schema(
     },
     startDate: {
       type: Date,
+      default: null,
     },
     endDate: {
       type: Date,
+      default: null,
     },
   },
-
   {
     timestamps: true,
   }
 );
+
+leaveSchema.pre("save", function (next) {
+  if (this.startDate && this.endDate) {
+    if (this.endDate <= this.startDate) {
+      next(new Error("End date must be after start date"));
+      return;
+    }
+  }
+  next();
+});
 
 const Leave = mongoose.model("Leave", leaveSchema);
 module.exports = Leave;
