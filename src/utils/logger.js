@@ -1,4 +1,6 @@
 const pino = require("pino");
+const pinoHttp = require("pino-http");
+
 const logger = pino({
   transport: {
     target: "pino-pretty",
@@ -20,10 +22,41 @@ const logger = pino({
     res: pino.stdSerializers.res,
   },
 });
-logger.info("Logger initialized");
-logger.debug("Debugging information");
-logger.error("Error logging example");
-logger.warn("Warning message example");
-logger.fatal("Fatal error example");
-logger.trace("Trace message example");
-module.exports = logger;
+
+const expressMiddleware = () => {
+  return pinoHttp({
+    logger,
+    autoLogging: true,
+    useLevel: "info",
+  });
+};
+
+const logInfo = (message, data = {}) => {
+  logger.info({ message, data });
+};
+
+const logError = (message, error = null, data = {}) => {
+  if (error) {
+    logger.error({ err: error, ...data }, message);
+  }
+  logger.error({ message, data });
+};
+const logWarn = (message, data = {}) => {
+  logger.warn({ message, data });
+};
+const logDebug = (message, data = {}) => {
+  logger.debug({ message, data });
+};
+const createChildLogger = (childName) => {
+  return logger.child({ child: childName });
+};
+
+module.exports = {
+  logger,
+  logInfo,
+  logError,
+  logWarn,
+  logDebug,
+  createChildLogger,
+  expressMiddleware,
+};

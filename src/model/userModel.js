@@ -22,9 +22,9 @@ const userSchema = new mongoose.Schema({
       validator: async function (email) {
         const existingUser = await this.constructor.findOne({ email });
         if (existingUser) {
-          return false; // Email already exists
+          return false;
         }
-        return true; // Email is unique
+        return true;
       },
       message: "Email already exists",
     },
