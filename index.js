@@ -1,10 +1,9 @@
 const connect = require("./src/config/db");
 const express = require("express");
-const pino = require("pino-http");
+const logger = require("./src/utils/logger");
 const app = express();
 const port = 8080;
 
-app.use(pino());
 app.use(express.json());
 connect()
   .then(() => console.log("Database connected successfully"))
