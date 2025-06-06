@@ -31,7 +31,6 @@ const getLeaveBalance = async (req, res) => {
     });
   } catch (error) {
     logger.error("Get leave balance error", error, { userId: req.user?.id });
-    req.log.error("Get leave balance failed", error);
     res.status(500).json({
       success: false,
       message: "Internal server error",
@@ -54,44 +53,53 @@ const requestLeave = async (req, res) => {
 
     const leave = user.leave;
 
-    if (leave[leaveType] < days) {
+    // Check balance
+    if (leave[leaveType].remaining < days) {
       logger.warn("Insufficient leave balance", {
         userId,
         leaveType,
         requested: days,
-        available: leave[leaveType],
+        available: leave[leaveType].remaining,
       });
       return res.status(400).json({
         success: false,
-        message: `Insufficient ${leaveType} balance. Available: ${leave[leaveType]} days, Requested: ${days} days`,
+        message: `Insufficient ${leaveType} balance. Available: ${leave[leaveType].remaining} days, Requested: ${days} days`,
       });
     }
 
-    if (leave.startDate && leave.endDate) {
-      const existingStart = new Date(leave.startDate);
-      const existingEnd = new Date(leave.endDate);
-      const newStart = new Date(startDate);
-      const newEnd = new Date(endDate);
+    // Update leave balance
+    leave[leaveType].used += days;
+    leave[leaveType].remaining -= days;
 
-      if (newStart <= existingEnd && newEnd >= existingStart) {
-        return res.status(400).json({
-          success: false,
-          message: "Leave dates overlap with existing leave period",
-        });
-      }
-    }
+    // Set current leave
+    leave.currentLeave = {
+      startDate,
+      endDate,
+      type: leaveType,
+      days,
+    };
 
-    leave[leaveType] -= days;
-    leave.startDate = startDate;
-    leave.endDate = endDate;
+    // Add to history
+    const leaveRequest = {
+      leaveType,
+      startDate,
+      endDate,
+      days,
+      reason,
+      status: "approved",
+      appliedDate: new Date(),
+      approvedDate: new Date(),
+      approvedBy: "Auto-approved",
+    };
 
+    leave.history.push(leaveRequest);
     await leave.save();
 
     logger.info("Leave requested successfully", {
       userId,
       leaveType,
       days,
-      remainingBalance: leave[leaveType],
+      remainingBalance: leave[leaveType].remaining,
       startDate,
       endDate,
     });
@@ -101,12 +109,8 @@ const requestLeave = async (req, res) => {
       message: "Leave requested successfully",
       data: {
         leaveRequest: {
-          leaveType,
-          days,
-          startDate,
-          endDate,
-          reason,
-          remainingBalance: leave[leaveType],
+          ...leaveRequest,
+          id: leave.history[leave.history.length - 1]._id,
         },
         currentBalance: {
           annualLeave: leave.annualLeave,
@@ -117,7 +121,107 @@ const requestLeave = async (req, res) => {
     });
   } catch (error) {
     logger.error("Request leave error", error, { userId: req.user?.id });
-    req.log.error("Request leave failed", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
+
+// Add new endpoints
+const getLeaveHistory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { page = 1, limit = 10 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const user = await User.findById(userId).populate("leave");
+    if (!user || !user.leave) {
+      return res.status(404).json({
+        success: false,
+        message: "Leave record not found",
+      });
+    }
+
+    const history = user.leave.history
+      .sort((a, b) => b.appliedDate - a.appliedDate)
+      .slice(skip, skip + parseInt(limit));
+
+    const total = user.leave.history.length;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        requests: history.map((item) => ({
+          id: item._id,
+          userId: user._id,
+          userName: user.name,
+          userEmail: user.email,
+          supervisor: user.supervisor,
+          ...item.toObject(),
+        })),
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
+    });
+  } catch (error) {
+    logger.error("Get leave history error", error, { userId: req.user?.id });
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
+
+const cancelLeaveRequest = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { requestId } = req.params;
+
+    const user = await User.findById(userId).populate("leave");
+    if (!user || !user.leave) {
+      return res.status(404).json({
+        success: false,
+        message: "Leave record not found",
+      });
+    }
+
+    const leaveRequest = user.leave.history.id(requestId);
+    if (!leaveRequest) {
+      return res.status(404).json({
+        success: false,
+        message: "Leave request not found",
+      });
+    }
+
+    if (leaveRequest.status !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: "Only pending requests can be cancelled",
+      });
+    }
+
+    // Update status
+    leaveRequest.status = "cancelled";
+
+    // Refund the days if it was approved
+    if (leaveRequest.status === "approved") {
+      user.leave[leaveRequest.leaveType].used -= leaveRequest.days;
+      user.leave[leaveRequest.leaveType].remaining += leaveRequest.days;
+    }
+
+    await user.leave.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Leave request cancelled successfully",
+    });
+  } catch (error) {
+    logger.error("Cancel leave request error", error);
     res.status(500).json({
       success: false,
       message: "Internal server error",
@@ -366,6 +470,7 @@ const getLeaveStatistics = async (req, res) => {
   }
 };
 
+// Export new functions
 module.exports = {
   getLeaveBalance,
   requestLeave,
@@ -373,4 +478,6 @@ module.exports = {
   resetLeaveBalance,
   adjustLeaveBalance,
   getLeaveStatistics,
+  getLeaveHistory,
+  cancelLeaveRequest,
 };

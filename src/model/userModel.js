@@ -87,9 +87,22 @@ userSchema.post("save", async function (doc, next) {
 
       const leave = new Leave({
         userId: doc._id,
-        annualLeave: 10,
-        sickLeave: 14,
-        casualLeave: 5,
+        annualLeave: {
+          total: 10,
+          used: 0,
+          remaining: 10,
+        },
+        sickLeave: {
+          total: 14,
+          used: 0,
+          remaining: 14,
+        },
+        casualLeave: {
+          total: 5,
+          used: 0,
+          remaining: 5,
+        },
+        history: [],
       });
 
       const savedLeave = await leave.save();

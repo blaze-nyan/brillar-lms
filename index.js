@@ -26,7 +26,7 @@ app.use(
 );
 app.use("/api/auth/admin", adminRoutes);
 app.use("/api/auth/user", userRoutes);
-app.use("/api/auth/leave", leaveRoutes);
+app.use("/api/leave", leaveRoutes);
 
 connect()
   .then(() => console.log("Database connected successfully"))

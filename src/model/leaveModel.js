@@ -9,43 +9,60 @@ const leaveSchema = new mongoose.Schema(
       required: [true, "User ID is required"],
     },
     annualLeave: {
-      type: Number,
-      default: 10,
-      min: [0, "Annual leave cannot be negative"],
-      max: [10, "Annual leave cannot exceed 10 days"],
+      total: { type: Number, default: 10 },
+      used: { type: Number, default: 0 },
+      remaining: { type: Number, default: 10 },
     },
     sickLeave: {
-      type: Number,
-      default: 14,
-      min: [0, "Sick leave cannot be negative"],
-      max: [14, "Sick leave cannot exceed 14 days"],
+      total: { type: Number, default: 14 },
+      used: { type: Number, default: 0 },
+      remaining: { type: Number, default: 14 },
     },
     casualLeave: {
-      type: Number,
-      default: 5,
-      min: [0, "Casual leave cannot be negative"],
-      max: [5, "Casual leave cannot exceed 5 days"],
+      total: { type: Number, default: 5 },
+      used: { type: Number, default: 0 },
+      remaining: { type: Number, default: 5 },
     },
-    startDate: {
-      type: Date,
-      default: null,
+    currentLeave: {
+      startDate: { type: Date, default: null },
+      endDate: { type: Date, default: null },
+      type: { type: String, default: null },
+      days: { type: Number, default: 0 },
     },
-    endDate: {
-      type: Date,
-      default: null,
-    },
+    history: [
+      {
+        leaveType: String,
+        startDate: Date,
+        endDate: Date,
+        days: Number,
+        reason: String,
+        status: {
+          type: String,
+          enum: ["pending", "approved", "rejected", "cancelled"],
+          default: "approved",
+        },
+        appliedDate: { type: Date, default: Date.now },
+        approvedDate: Date,
+        approvedBy: String,
+        rejectionReason: String,
+      },
+    ],
   },
   {
     timestamps: true,
   }
 );
 
+// Update remaining when used changes
 leaveSchema.pre("save", function (next) {
-  if (this.startDate && this.endDate) {
-    if (this.endDate <= this.startDate) {
-      next(new Error("End date must be after start date"));
-      return;
-    }
+  if (this.isModified("annualLeave.used")) {
+    this.annualLeave.remaining = this.annualLeave.total - this.annualLeave.used;
+  }
+  if (this.isModified("sickLeave.used")) {
+    this.sickLeave.remaining = this.sickLeave.total - this.sickLeave.used;
+  }
+  if (this.isModified("casualLeave.used")) {
+    this.casualLeave.remaining = this.casualLeave.total - this.casualLeave.used;
   }
   next();
 });
