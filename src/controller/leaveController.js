@@ -421,43 +421,149 @@ const adjustLeaveBalance = async (req, res) => {
 
 const getLeaveStatistics = async (req, res) => {
   try {
-    const stats = await Leave.aggregate([
+    // Get total users count
+    const totalUsers = await User.countDocuments();
+
+    // Get users currently on leave
+    const currentDate = new Date();
+    const usersOnLeave = await Leave.countDocuments({
+      "currentLeave.startDate": { $lte: currentDate },
+      "currentLeave.endDate": { $gte: currentDate },
+    });
+
+    // Calculate average leave usage
+    const leaveStats = await Leave.aggregate([
       {
         $group: {
           _id: null,
-          totalUsers: { $sum: 1 },
-          avgAnnualLeave: { $avg: "$annualLeave" },
-          avgSickLeave: { $avg: "$sickLeave" },
-          avgCasualLeave: { $avg: "$casualLeave" },
-          totalAnnualLeave: { $sum: "$annualLeave" },
-          totalSickLeave: { $sum: "$sickLeave" },
-          totalCasualLeave: { $sum: "$casualLeave" },
+          avgAnnualUsed: { $avg: "$annualLeave.used" },
+          avgSickUsed: { $avg: "$sickLeave.used" },
+          avgCasualUsed: { $avg: "$casualLeave.used" },
+          totalAnnualUsed: { $sum: "$annualLeave.used" },
+          totalSickUsed: { $sum: "$sickLeave.used" },
+          totalCasualUsed: { $sum: "$casualLeave.used" },
         },
       },
     ]);
 
-    const usersOnLeave = await Leave.countDocuments({
-      startDate: { $lte: new Date() },
-      endDate: { $gte: new Date() },
+    const statistics = leaveStats[0] || {
+      avgAnnualUsed: 0,
+      avgSickUsed: 0,
+      avgCasualUsed: 0,
+      totalAnnualUsed: 0,
+      totalSickUsed: 0,
+      totalCasualUsed: 0,
+    };
+
+    // Get leave distribution by supervisor
+    const supervisorStats = await User.aggregate([
+      {
+        $lookup: {
+          from: "leaves",
+          localField: "leave",
+          foreignField: "_id",
+          as: "leaveData",
+        },
+      },
+      {
+        $unwind: "$leaveData",
+      },
+      {
+        $group: {
+          _id: "$supervisor",
+          totalLeaveUsed: {
+            $sum: {
+              $add: [
+                "$leaveData.annualLeave.used",
+                "$leaveData.sickLeave.used",
+                "$leaveData.casualLeave.used",
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const leaveDistributionBySupervisor = {};
+    supervisorStats.forEach((stat) => {
+      if (stat._id) {
+        leaveDistributionBySupervisor[stat._id] = stat.totalLeaveUsed;
+      }
     });
 
-    const statistics = stats[0] || {
-      totalUsers: 0,
-      avgAnnualLeave: 0,
-      avgSickLeave: 0,
-      avgCasualLeave: 0,
-      totalAnnualLeave: 0,
-      totalSickLeave: 0,
-      totalCasualLeave: 0,
+    // Get monthly leave distribution (last 6 months)
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+    const monthlyStats = await Leave.aggregate([
+      {
+        $unwind: "$history",
+      },
+      {
+        $match: {
+          "history.appliedDate": { $gte: sixMonthsAgo },
+          "history.status": "approved",
+        },
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: "$history.appliedDate" },
+            month: { $month: "$history.appliedDate" },
+          },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $sort: { "_id.year": 1, "_id.month": 1 },
+      },
+    ]);
+
+    const monthNames = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+
+    const monthlyLeaveDistribution = monthlyStats.map((stat) => ({
+      month: monthNames[stat._id.month - 1],
+      count: stat.count,
+    }));
+
+    const response = {
+      totalUsers,
+      usersOnLeave,
+      averageLeaveUsage: {
+        annualLeave: parseFloat(statistics.avgAnnualUsed.toFixed(1)) || 0,
+        sickLeave: parseFloat(statistics.avgSickUsed.toFixed(1)) || 0,
+        casualLeave: parseFloat(statistics.avgCasualUsed.toFixed(1)) || 0,
+      },
+      leaveDistributionByType: {
+        annualLeave: statistics.totalAnnualUsed || 0,
+        sickLeave: statistics.totalSickUsed || 0,
+        casualLeave: statistics.totalCasualUsed || 0,
+      },
+      leaveDistributionBySupervisor,
+      monthlyLeaveDistribution,
     };
+
+    logger.info("Leave statistics retrieved", {
+      adminId: req.currentAdmin._id,
+    });
 
     res.status(200).json({
       success: true,
       data: {
-        statistics: {
-          ...statistics,
-          usersCurrentlyOnLeave: usersOnLeave,
-        },
+        statistics: response,
       },
     });
   } catch (error) {
