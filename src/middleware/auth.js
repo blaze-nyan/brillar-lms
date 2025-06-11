@@ -45,6 +45,7 @@ const authenticateToken = async (req, res, next) => {
 const authenticateUser = async (req, res, next) => {
   try {
     await authenticateToken(req, res, async () => {
+      // ✅ ONLY allow users (employees) - NOT admins
       if (req.user.role !== "user") {
         logger.warn("Non-user attempting user access", {
           userId: req.user.id,
@@ -53,7 +54,8 @@ const authenticateUser = async (req, res, next) => {
         });
         return res.status(403).json({
           success: false,
-          message: "User access required",
+          message:
+            "Employee access required - admins cannot access employee features",
         });
       }
 
@@ -86,6 +88,7 @@ const authenticateUser = async (req, res, next) => {
 const authenticateAdmin = async (req, res, next) => {
   try {
     await authenticateToken(req, res, async () => {
+      // ✅ ONLY allow admins - NOT users
       if (req.user.role !== "admin") {
         logger.warn("Non-admin attempting admin access", {
           userId: req.user.id,
@@ -94,7 +97,8 @@ const authenticateAdmin = async (req, res, next) => {
         });
         return res.status(403).json({
           success: false,
-          message: "Admin access required",
+          message:
+            "Admin access required - employees cannot access admin panel",
         });
       }
 

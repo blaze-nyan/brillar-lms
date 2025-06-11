@@ -4,17 +4,60 @@ const { createChildLogger } = require("../utils/logger");
 
 const logger = createChildLogger("LeaveManagement");
 
+// Helper function to create leave record if it doesn't exist
+const ensureLeaveRecord = async (userId) => {
+  try {
+    let user = await User.findById(userId).populate("leave");
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    if (!user.leave) {
+      console.log("Creating leave record for user:", userId);
+
+      const leave = new Leave({
+        userId: user._id,
+        annualLeave: {
+          total: 10,
+          used: 0,
+          remaining: 10,
+        },
+        sickLeave: {
+          total: 14,
+          used: 0,
+          remaining: 14,
+        },
+        casualLeave: {
+          total: 5,
+          used: 0,
+          remaining: 5,
+        },
+        history: [],
+      });
+
+      const savedLeave = await leave.save();
+      user.leave = savedLeave._id;
+      await user.save();
+
+      // Re-populate the leave data
+      user = await User.findById(userId).populate("leave");
+      console.log("Leave record created successfully for user:", userId);
+    }
+
+    return user;
+  } catch (error) {
+    console.error("Error ensuring leave record:", error);
+    throw error;
+  }
+};
+
 const getLeaveBalance = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const user = await User.findById(userId).populate("leave");
-    if (!user || !user.leave) {
-      return res.status(404).json({
-        success: false,
-        message: "Leave record not found",
-      });
-    }
+    // Ensure leave record exists
+    const user = await ensureLeaveRecord(userId);
 
     logger.info("Leave balance retrieved", { userId });
 
@@ -43,14 +86,8 @@ const requestLeave = async (req, res) => {
     const userId = req.user.id;
     const { leaveType, days, startDate, endDate, reason } = req.body;
 
-    const user = await User.findById(userId).populate("leave");
-    if (!user || !user.leave) {
-      return res.status(404).json({
-        success: false,
-        message: "Leave record not found",
-      });
-    }
-
+    // Ensure leave record exists
+    const user = await ensureLeaveRecord(userId);
     const leave = user.leave;
 
     // Check balance
@@ -128,20 +165,14 @@ const requestLeave = async (req, res) => {
   }
 };
 
-// Add new endpoints
 const getLeaveHistory = async (req, res) => {
   try {
     const userId = req.user.id;
     const { page = 1, limit = 10 } = req.query;
     const skip = (page - 1) * limit;
 
-    const user = await User.findById(userId).populate("leave");
-    if (!user || !user.leave) {
-      return res.status(404).json({
-        success: false,
-        message: "Leave record not found",
-      });
-    }
+    // Ensure leave record exists
+    const user = await ensureLeaveRecord(userId);
 
     const history = user.leave.history
       .sort((a, b) => b.appliedDate - a.appliedDate)
@@ -182,13 +213,8 @@ const cancelLeaveRequest = async (req, res) => {
     const userId = req.user.id;
     const { requestId } = req.params;
 
-    const user = await User.findById(userId).populate("leave");
-    if (!user || !user.leave) {
-      return res.status(404).json({
-        success: false,
-        message: "Leave record not found",
-      });
-    }
+    // Ensure leave record exists
+    const user = await ensureLeaveRecord(userId);
 
     const leaveRequest = user.leave.history.id(requestId);
     if (!leaveRequest) {
@@ -248,22 +274,42 @@ const getAllLeaveBalances = async (req, res) => {
 
     const total = await User.countDocuments(userQuery);
 
-    const leaveData = users.map((user) => ({
-      userId: user._id,
-      name: user.name,
-      email: user.email,
-      supervisor: user.supervisor,
-      leaveBalance: user.leave
-        ? {
-            annualLeave: user.leave.annualLeave,
-            sickLeave: user.leave.sickLeave,
-            casualLeave: user.leave.casualLeave,
-            startDate: user.leave.startDate,
-            endDate: user.leave.endDate,
-            lastUpdated: user.leave.updatedAt,
+    // Ensure all users have leave records
+    const leaveData = await Promise.all(
+      users.map(async (user) => {
+        if (!user.leave) {
+          // Create leave record for users who don't have one
+          try {
+            await ensureLeaveRecord(user._id);
+            // Re-fetch user with populated leave
+            const updatedUser = await User.findById(user._id).populate("leave");
+            user = updatedUser;
+          } catch (error) {
+            console.error(
+              `Failed to create leave record for user ${user._id}:`,
+              error
+            );
           }
-        : null,
-    }));
+        }
+
+        return {
+          userId: user._id,
+          name: user.name,
+          email: user.email,
+          supervisor: user.supervisor,
+          leaveBalance: user.leave
+            ? {
+                annualLeave: user.leave.annualLeave,
+                sickLeave: user.leave.sickLeave,
+                casualLeave: user.leave.casualLeave,
+                startDate: user.leave.startDate,
+                endDate: user.leave.endDate,
+                lastUpdated: user.leave.updatedAt,
+              }
+            : null,
+        };
+      })
+    );
 
     logger.info("All leave balances retrieved by admin", {
       adminId: req.currentAdmin._id,
@@ -302,27 +348,31 @@ const resetLeaveBalance = async (req, res) => {
     const { userId } = req.params;
     const { annualLeave = 10, sickLeave = 14, casualLeave = 5 } = req.body;
 
-    const user = await User.findById(userId).populate("leave");
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    if (!user.leave) {
-      return res.status(404).json({
-        success: false,
-        message: "Leave record not found",
-      });
-    }
-
+    // Ensure leave record exists
+    const user = await ensureLeaveRecord(userId);
     const leave = user.leave;
-    leave.annualLeave = annualLeave;
-    leave.sickLeave = sickLeave;
-    leave.casualLeave = casualLeave;
-    leave.startDate = null;
-    leave.endDate = null;
+
+    leave.annualLeave = {
+      total: annualLeave,
+      used: 0,
+      remaining: annualLeave,
+    };
+    leave.sickLeave = {
+      total: sickLeave,
+      used: 0,
+      remaining: sickLeave,
+    };
+    leave.casualLeave = {
+      total: casualLeave,
+      used: 0,
+      remaining: casualLeave,
+    };
+    leave.currentLeave = {
+      startDate: null,
+      endDate: null,
+      type: null,
+      days: 0,
+    };
 
     await leave.save();
 
@@ -369,19 +419,21 @@ const adjustLeaveBalance = async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId).populate("leave");
-    if (!user || !user.leave) {
-      return res.status(404).json({
-        success: false,
-        message: "User or leave record not found",
-      });
+    // Ensure leave record exists
+    const user = await ensureLeaveRecord(userId);
+    const leave = user.leave;
+
+    const oldBalance = leave[leaveType].remaining;
+    const newRemaining = Math.max(0, oldBalance + adjustment);
+
+    // Update the remaining balance
+    leave[leaveType].remaining = newRemaining;
+
+    // If increasing, increase total too to maintain consistency
+    if (adjustment > 0) {
+      leave[leaveType].total += adjustment;
     }
 
-    const leave = user.leave;
-    const oldBalance = leave[leaveType];
-    const newBalance = Math.max(0, oldBalance + adjustment);
-
-    leave[leaveType] = newBalance;
     await leave.save();
 
     logger.info("Leave balance adjusted by admin", {
@@ -390,7 +442,7 @@ const adjustLeaveBalance = async (req, res) => {
       leaveType,
       oldBalance,
       adjustment,
-      newBalance,
+      newBalance: newRemaining,
       reason,
     });
 
@@ -402,7 +454,7 @@ const adjustLeaveBalance = async (req, res) => {
         leaveType,
         oldBalance,
         adjustment,
-        newBalance,
+        newBalance: newRemaining,
         reason,
       },
     });
@@ -466,7 +518,10 @@ const getLeaveStatistics = async (req, res) => {
         },
       },
       {
-        $unwind: "$leaveData",
+        $unwind: {
+          path: "$leaveData",
+          preserveNullAndEmptyArrays: true,
+        },
       },
       {
         $group: {
@@ -474,9 +529,9 @@ const getLeaveStatistics = async (req, res) => {
           totalLeaveUsed: {
             $sum: {
               $add: [
-                "$leaveData.annualLeave.used",
-                "$leaveData.sickLeave.used",
-                "$leaveData.casualLeave.used",
+                { $ifNull: ["$leaveData.annualLeave.used", 0] },
+                { $ifNull: ["$leaveData.sickLeave.used", 0] },
+                { $ifNull: ["$leaveData.casualLeave.used", 0] },
               ],
             },
           },
@@ -497,7 +552,10 @@ const getLeaveStatistics = async (req, res) => {
 
     const monthlyStats = await Leave.aggregate([
       {
-        $unwind: "$history",
+        $unwind: {
+          path: "$history",
+          preserveNullAndEmptyArrays: false,
+        },
       },
       {
         $match: {
